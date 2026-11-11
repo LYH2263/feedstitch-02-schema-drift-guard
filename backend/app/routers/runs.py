@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException
 from app.db import connect
 from app.repositories import runs as runs_repo
 from app.schemas.entities import RunRequest
-from app.services.ingest_service import run_ingest
+from app.services.ingest_service import run_ingest, run_reconciliation
 
 router = APIRouter(tags=["runs"])
 
@@ -27,6 +27,14 @@ def get_run(run_id: int):
         return row
     finally:
         conn.close()
+
+
+@router.get("/runs/{run_id}/reconciliation")
+def get_run_reconciliation(run_id: int):
+    try:
+        return run_reconciliation(run_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @router.post("/sources/{source_id}/runs")

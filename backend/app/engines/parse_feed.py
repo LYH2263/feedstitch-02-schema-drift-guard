@@ -1,4 +1,11 @@
-"""Parse local fixture feeds into normalized staging records."""
+"""Parse local fixture feeds into normalized staging records.
+
+Parsing is deliberately lenient: structural contract enforcement (required
+fields, expected types, undeclared fields) belongs to the per-source
+``schema_drift_guard``. A record missing a core field is therefore kept with
+``None`` placeholders plus its untouched ``raw`` payload, so the guard can
+record a structured drift instead of failing the whole feed run.
+"""
 
 from __future__ import annotations
 
@@ -8,29 +15,80 @@ from pathlib import Path
 from typing import Any
 
 
-REQUIRED_FIELDS = ("business_key", "title", "price", "category", "event_ts", "source_revision")
+CORE_FIELDS = ("business_key", "title", "price", "category", "event_ts", "source_revision")
+
+_STRING_FIELDS = ("business_key", "title", "category", "event_ts")
+
+
+def coerce_value(value: Any, expected_type: str) -> tuple[bool, Any]:
+    """Best-effort scalar coercion.
+
+    Returns ``(ok, coerced_value)``. Strings that parse into the expected type
+    are accepted, because text formats (xml/jsonl) carry numbers as strings.
+    Booleans never count as numbers, mirroring JSON semantics.
+    """
+    if value is None:
+        return False, None
+    if expected_type == "string":
+        if isinstance(value, bool):
+            return True, str(value).lower()
+        if isinstance(value, (str, int, float)):
+            return True, str(value).strip()
+        return False, value
+    if expected_type == "number":
+        if isinstance(value, bool):
+            return False, value
+        if isinstance(value, (int, float)):
+            return True, float(value)
+        if isinstance(value, str):
+            try:
+                return True, float(value.strip())
+            except ValueError:
+                return False, value
+        return False, value
+    if expected_type == "integer":
+        if isinstance(value, bool):
+            return False, value
+        if isinstance(value, int):
+            return True, int(value)
+        if isinstance(value, float):
+            return (True, int(value)) if value.is_integer() else (False, value)
+        if isinstance(value, str):
+            text = value.strip()
+            try:
+                return True, int(text)
+            except ValueError:
+                return False, text
+        return False, value
+    if expected_type == "boolean":
+        if isinstance(value, bool):
+            return True, value
+        if isinstance(value, int) and value in (0, 1):
+            return True, bool(value)
+        if isinstance(value, str) and value.strip().lower() in ("true", "false", "1", "0"):
+            return True, value.strip().lower() in ("true", "1")
+        return False, value
+    return False, value
 
 
 def _normalize_item(raw: dict[str, Any]) -> dict[str, Any]:
-    missing = [k for k in REQUIRED_FIELDS if k not in raw]
-    if missing:
-        raise ValueError(f"missing fields: {', '.join(missing)}")
-    return {
-        "business_key": str(raw["business_key"]).strip(),
-        "title": str(raw["title"]).strip(),
-        "price": float(raw["price"]),
-        "category": str(raw["category"]).strip(),
-        "event_ts": str(raw["event_ts"]).strip(),
-        "source_revision": int(raw["source_revision"]),
-        "payload": {
-            "business_key": str(raw["business_key"]).strip(),
-            "title": str(raw["title"]).strip(),
-            "price": float(raw["price"]),
-            "category": str(raw["category"]).strip(),
-            "event_ts": str(raw["event_ts"]).strip(),
-            "source_revision": int(raw["source_revision"]),
-        },
-    }
+    item: dict[str, Any] = {key: raw.get(key) for key in CORE_FIELDS}
+    item["raw"] = dict(raw)
+
+    for key in _STRING_FIELDS:
+        value = item[key]
+        if value is not None and not isinstance(value, (dict, list)):
+            item[key] = str(value).strip()
+
+    if item["price"] is not None:
+        ok, coerced = coerce_value(item["price"], "number")
+        if ok:
+            item["price"] = coerced
+    if item["source_revision"] is not None:
+        ok, coerced = coerce_value(item["source_revision"], "integer")
+        if ok:
+            item["source_revision"] = coerced
+    return item
 
 
 def parse_json(path: Path) -> list[dict[str, Any]]:
@@ -51,9 +109,12 @@ def parse_jsonl(path: Path) -> list[dict[str, Any]]:
         if not text:
             continue
         try:
-            rows.append(_normalize_item(json.loads(text)))
-        except Exception as exc:  # noqa: BLE001
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
             raise ValueError(f"jsonl line {line_no}: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ValueError(f"jsonl line {line_no}: row must be an object")
+        rows.append(_normalize_item(parsed))
     return rows
 
 

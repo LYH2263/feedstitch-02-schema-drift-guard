@@ -1,8 +1,6 @@
 import json
 from pathlib import Path
 
-import pytest
-
 from app.config import FIXTURES_DIR
 from app.engines.merge_rules import decide_merge, eligible_for_incremental, fields_conflict
 from app.engines.parse_feed import parse_fixture
@@ -77,8 +75,13 @@ def test_watermark_gate():
     assert eligible_for_incremental("2026-10-01T00:00:00Z", "2026-11-01T00:00:00Z") is False
 
 
-def test_parse_missing_field_raises(tmp_path: Path):
+def test_parse_missing_field_is_lenient(tmp_path: Path):
+    # Parsing is lenient: missing core fields stay None and the raw payload is
+    # preserved for the schema_drift_guard contract gate.
     p = tmp_path / "bad.json"
     p.write_text(json.dumps([{"business_key": "x"}]), encoding="utf-8")
-    with pytest.raises(ValueError):
-        parse_fixture(p, "json")
+    items = parse_fixture(p, "json")
+    assert len(items) == 1
+    assert items[0]["business_key"] == "x"
+    assert items[0]["title"] is None
+    assert items[0]["raw"] == {"business_key": "x"}

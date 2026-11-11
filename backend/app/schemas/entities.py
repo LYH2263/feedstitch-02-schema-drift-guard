@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -11,3 +13,13 @@ class LookbackUpdate(BaseModel):
 
 class SettingUpdate(BaseModel):
     value: str
+
+
+class ContractFieldSpec(BaseModel):
+    required: bool = False
+    type: Literal["string", "number", "integer", "boolean"]
+
+
+class ContractUpdate(BaseModel):
+    allow_undeclared: bool = False
+    fields: dict[str, ContractFieldSpec]

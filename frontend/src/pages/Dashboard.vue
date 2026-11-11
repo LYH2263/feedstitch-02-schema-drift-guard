@@ -22,6 +22,7 @@ onMounted(async () => {
       <div class="tile"><div class="hero-num">{{ stats.source_count }}</div><div class="muted">源</div></div>
       <div class="tile"><div class="hero-num">{{ stats.canonical_count }}</div><div class="muted">Canonical</div></div>
       <div class="tile"><div class="hero-num">{{ stats.conflict_count }}</div><div class="muted">冲突</div></div>
+      <div class="tile"><div class="hero-num">{{ stats.drift_count }}</div><div class="muted">结构漂移</div></div>
       <div class="tile"><div class="hero-num">{{ stats.run_count }}</div><div class="muted">Runs</div></div>
       <div class="tile"><div class="hero-num">{{ stats.staging_count }}</div><div class="muted">Staging</div></div>
       <div class="tile"><div class="hero-num">{{ stats.enabled_sources }}</div><div class="muted">启用源</div></div>

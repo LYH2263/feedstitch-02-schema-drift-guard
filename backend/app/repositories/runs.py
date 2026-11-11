@@ -13,8 +13,8 @@ def create_run(
     cur = conn.execute(
         """
         INSERT INTO runs(source_id, mode, status, parsed_count, upserted_count,
-                         conflict_count, skipped_count, report_json, created_at)
-        VALUES (?,?, 'running', 0, 0, 0, 0, '{}', datetime('now'))
+                         conflict_count, skipped_count, drift_count, report_json, created_at)
+        VALUES (?,?, 'running', 0, 0, 0, 0, 0, '{}', datetime('now'))
         """,
         (source_id, mode),
     )
@@ -30,12 +30,13 @@ def finish_run(
     upserted: int,
     conflicts: int,
     skipped: int,
+    drift: int,
     report: dict[str, Any],
 ) -> None:
     conn.execute(
         """
         UPDATE runs SET status=?, parsed_count=?, upserted_count=?, conflict_count=?,
-            skipped_count=?, report_json=? WHERE id=?
+            skipped_count=?, drift_count=?, report_json=? WHERE id=?
         """,
         (
             status,
@@ -43,46 +44,35 @@ def finish_run(
             upserted,
             conflicts,
             skipped,
+            drift,
             json.dumps(report, ensure_ascii=False),
             run_id,
         ),
     )
 
 
-def list_runs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
-        SELECT r.id, r.source_id, s.name AS source_name, r.mode, r.status,
-               r.parsed_count, r.upserted_count, r.conflict_count, r.skipped_count,
-               r.report_json, r.created_at
-        FROM runs r JOIN sources s ON s.id = r.source_id
-        ORDER BY r.id DESC
-        """
-    ).fetchall()
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["report"] = json.loads(d.pop("report_json") or "{}")
-        out.append(d)
-    return out
+_RUN_SELECT = """
+    SELECT r.id, r.source_id, s.name AS source_name, r.mode, r.status,
+           r.parsed_count, r.upserted_count, r.conflict_count, r.skipped_count,
+           r.drift_count, r.report_json, r.created_at
+    FROM runs r JOIN sources s ON s.id = r.source_id
+"""
 
 
-def get_run(conn: sqlite3.Connection, run_id: int) -> dict[str, Any] | None:
-    row = conn.execute(
-        """
-        SELECT r.id, r.source_id, s.name AS source_name, r.mode, r.status,
-               r.parsed_count, r.upserted_count, r.conflict_count, r.skipped_count,
-               r.report_json, r.created_at
-        FROM runs r JOIN sources s ON s.id = r.source_id
-        WHERE r.id = ?
-        """,
-        (run_id,),
-    ).fetchone()
-    if not row:
-        return None
+def _hydrate(row: sqlite3.Row) -> dict[str, Any]:
     d = dict(row)
     d["report"] = json.loads(d.pop("report_json") or "{}")
     return d
+
+
+def list_runs(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    rows = conn.execute(_RUN_SELECT + " ORDER BY r.id DESC").fetchall()
+    return [_hydrate(r) for r in rows]
+
+
+def get_run(conn: sqlite3.Connection, run_id: int) -> dict[str, Any] | None:
+    row = conn.execute(_RUN_SELECT + " WHERE r.id = ?", (run_id,)).fetchone()
+    return _hydrate(row) if row else None
 
 
 def insert_staging(
@@ -138,6 +128,38 @@ def list_staging(conn: sqlite3.Connection, run_id: int | None = None) -> list[di
     return out
 
 
+def disposition_stats(
+    conn: sqlite3.Connection, run_id: int | None = None
+) -> dict[str, int]:
+    """Live per-disposition counts.
+
+    Structural drift rows live in ``schema_drifts`` (not ``staging_rows``);
+    they are merged here as the virtual ``schema_drift`` disposition so the
+    staging statistics and the drift list stay mutually explainable.
+    """
+    clause = "" if run_id is None else "WHERE run_id = ?"
+    params: tuple[Any, ...] = (run_id,) if run_id is not None else ()
+
+    rows = conn.execute(
+        f"SELECT disposition, COUNT(*) AS c FROM staging_rows {clause} GROUP BY disposition",
+        params,
+    ).fetchall()
+    counts = {r["disposition"]: int(r["c"]) for r in rows}
+    counts["schema_drift"] = int(
+        conn.execute(
+            f"SELECT COUNT(*) AS c FROM schema_drifts {clause}", params
+        ).fetchone()["c"]
+    )
+    counts["staging_total"] = sum(
+        int(r["c"])
+        for r in conn.execute(
+            f"SELECT COUNT(*) AS c FROM staging_rows {clause}", params
+        ).fetchall()
+    )
+    counts["total_accounted"] = counts["staging_total"] + counts["schema_drift"]
+    return counts
+
+
 def insert_conflict(
     conn: sqlite3.Connection,
     *,
@@ -166,14 +188,26 @@ def insert_conflict(
     )
 
 
-def list_conflicts(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    rows = conn.execute(
-        """
-        SELECT id, run_id, source_id, business_key, existing_payload, incoming_payload,
-               reason, created_at
-        FROM conflicts ORDER BY id DESC
-        """
-    ).fetchall()
+def list_conflicts(
+    conn: sqlite3.Connection, run_id: int | None = None
+) -> list[dict[str, Any]]:
+    if run_id is None:
+        rows = conn.execute(
+            """
+            SELECT id, run_id, source_id, business_key, existing_payload, incoming_payload,
+                   reason, created_at
+            FROM conflicts ORDER BY id DESC
+            """
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT id, run_id, source_id, business_key, existing_payload, incoming_payload,
+                   reason, created_at
+            FROM conflicts WHERE run_id = ? ORDER BY id
+            """,
+            (run_id,),
+        ).fetchall()
     out = []
     for r in rows:
         d = dict(r)
@@ -181,3 +215,15 @@ def list_conflicts(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         d["incoming"] = json.loads(d.pop("incoming_payload"))
         out.append(d)
     return out
+
+
+def count_conflicts(
+    conn: sqlite3.Connection, run_id: int | None = None
+) -> int:
+    if run_id is None:
+        return int(conn.execute("SELECT COUNT(*) c FROM conflicts").fetchone()["c"])
+    return int(
+        conn.execute(
+            "SELECT COUNT(*) c FROM conflicts WHERE run_id = ?", (run_id,)
+        ).fetchone()["c"]
+    )

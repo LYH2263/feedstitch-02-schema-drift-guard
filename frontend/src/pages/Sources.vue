@@ -14,13 +14,13 @@ onMounted(async () => {
 <template>
   <div class="page">
     <h1>源管理</h1>
-    <p class="muted">本地夹具源（json / jsonl / xml），不含活网爬虫。</p>
+    <p class="muted">本地夹具源（json / jsonl / xml），不含活网爬虫。每个源在「字段契约」页维护必填与类型约定。</p>
     <p v-if="err" class="tag danger">{{ err }}</p>
     <div class="panel">
       <table>
         <thead>
           <tr>
-            <th>ID</th><th>名称</th><th>格式</th><th>夹具</th><th>水位线</th><th>lookback</th><th>说明</th>
+            <th>ID</th><th>名称</th><th>格式</th><th>夹具</th><th>水位线</th><th>lookback</th><th>说明</th><th></th>
           </tr>
         </thead>
         <tbody>
@@ -32,6 +32,7 @@ onMounted(async () => {
             <td class="mono">{{ s.watermark_ts || '—' }}</td>
             <td>{{ s.lookback_seconds }}s</td>
             <td class="muted">{{ s.note }}</td>
+            <td><router-link class="tag ok" to="/contracts">配置契约</router-link></td>
           </tr>
         </tbody>
       </table>

@@ -1,0 +1,4 @@
+{"business_key":"SKU-4001","title":"Delta Clean Tile","price":22.0,"category":"building","event_ts":"2026-11-03T08:00:00Z","source_revision":1}
+{"business_key":"SKU-4002","title":"Delta Missing Category","price":15.5,"event_ts":"2026-11-03T08:05:00Z","source_revision":1}
+{"business_key":"SKU-4003","title":"Delta Bad Price","price":"oops","category":"building","event_ts":"2026-11-03T08:10:00Z","source_revision":1}
+{"business_key":"SKU-4004","title":"Delta Undeclared Field","price":40.0,"category":"building","event_ts":"2026-11-03T08:15:00Z","source_revision":1,"loyalty_tier":"gold"}
